@@ -1,239 +1,110 @@
-# mcp-to-skill-converter
+# MCP to Skill Converter
 
-Convert any MCP server into a Claude Skill with 90% context savings.
+Convert any MCP server into a Claude Skill with ~90% context savings. Supports both **stdio** and **HTTP** (Streamable HTTP) transports.
 
-## Why This Exists
+## Requirements
 
-MCP servers are great but load all tool definitions into context at startup. With 20+ tools, that's 30-50k tokens gone before Claude does any work.
-
-This converter applies the "progressive disclosure" pattern (inspired by playwright-skill) to any MCP server:
-- **Startup**: ~100 tokens (just metadata)
-- **When used**: ~5k tokens (full instructions)
-- **Executing**: 0 tokens (runs externally)
+- [uv](https://docs.astral.sh/uv/) (no project setup needed -- dependencies are inline)
 
 ## Quick Start
 
 ```bash
-# 1. Create your MCP config file
-cat > github-mcp.json << 'EOF'
+# Convert a single MCP server config
+./mcp_to_skill.py --mcp-config my-server.json --output-dir ./skills/my-server
+
+# Convert a multi-server config (one skill per server)
+./mcp_to_skill.py --mcp-config example-mcp.json --output-dir ./skills
+
+# Convert only a specific server from a multi-server config
+./mcp_to_skill.py --mcp-config example-mcp.json --server youtrack
+
+# Omit --output-dir to default to ./skills/<server-name>
+./mcp_to_skill.py --mcp-config example-mcp.json
+```
+
+## Config Format
+
+The converter accepts the standard `mcpServers` format used by Claude Desktop and other MCP clients.
+
+### Multi-server config (recommended)
+
+```json
 {
-  "name": "github",
+  "mcpServers": {
+    "github": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_TOKEN": "ghp_..." }
+    },
+    "youtrack": {
+      "url": "https://example.youtrack.cloud/mcp",
+      "transport": "http",
+      "headers": { "Authorization": "Bearer ..." }
+    }
+  }
+}
+```
+
+### Single-server config (also works)
+
+```json
+{
   "command": "npx",
   "args": ["-y", "@modelcontextprotocol/server-github"],
-  "env": {"GITHUB_TOKEN": "your-token-here"}
+  "env": { "GITHUB_TOKEN": "ghp_..." }
 }
-EOF
-
-# 2. Convert to Skill
-python mcp_to_skill.py \
-  --mcp-config github-mcp.json \
-  --output-dir ./skills/github
-
-# 3. Install dependencies
-cd skills/github
-pip install mcp
-
-# 4. Copy to Claude
-cp -r . ~/.claude/skills/github
 ```
 
-Done! Claude can now use GitHub tools with minimal context.
+## What Gets Generated
 
-## What It Does
+For each MCP server, the converter creates a skill directory:
 
-The converter:
-1. Reads your MCP server config
-2. Generates a Skill structure with:
-   - `SKILL.md` - Instructions for Claude
-   - `executor.py` - Handles MCP calls dynamically
-   - Config files
-3. Claude loads metadata only (~100 tokens)
-4. Full instructions load when the skill is needed
-5. Executor runs MCP tools outside context
-
-## Context Savings
-
-**Before (MCP)**:
 ```
-20 tools = 30k tokens always loaded
-Context available: 170k / 200k = 85%
+skills/github/
+  SKILL.md          # Instructions for Claude (tool list, usage pattern)
+  executor.py       # Calls the MCP server at runtime (uv script, no install needed)
+  mcp-config.json   # Server connection config
 ```
 
-**After (Skills)**:
-```
-20 skills = 2k tokens metadata
-When 1 skill active: 7k tokens
-Context available: 193k / 200k = 96.5%
-```
+## Using a Generated Skill
 
-## Real Example
-
-GitHub MCP server (8 tools):
-
-| Metric | MCP | Skill | Savings |
-|--------|-----|-------|---------|
-| Idle | 8,000 tokens | 100 tokens | 98.75% |
-| Active | 8,000 tokens | 5,000 tokens | 37.5% |
-
-## Works With
-
-Any standard MCP server:
-- ✅ @modelcontextprotocol/server-github
-- ✅ @modelcontextprotocol/server-slack  
-- ✅ @modelcontextprotocol/server-filesystem
-- ✅ @modelcontextprotocol/server-postgres
-- ✅ Your custom MCP servers
-
-## When To Use
-
-**Use this converter when:**
-- You have 10+ tools
-- Context space is tight
-- Most tools won't be used in each conversation
-- Tools are independent
-
-**Stick with MCP when:**
-- You have 1-5 tools
-- Need complex OAuth flows
-- Need persistent connections
-- Cross-platform compatibility critical
-
-**Best approach: Use both**
-- MCP for core tools
-- Skills for extended toolset
-
-## Requirements
+### With Claude Code
 
 ```bash
-pip install mcp
+cp -r skills/github ~/.claude/skills/
 ```
 
-Python 3.8+ required.
+Claude discovers it automatically.
+
+### Manual Testing
+
+```bash
+cd skills/github
+
+# List available tools
+./executor.py --list
+
+# Get detailed schema for a tool
+./executor.py --describe create_issue
+
+# Call a tool
+./executor.py --call '{"tool": "search_repositories", "arguments": {"query": "mcp"}}'
+```
 
 ## How It Works
 
-```
-┌─────────────────────────────────────┐
-│ Your MCP Config                     │
-│ (JSON file)                         │
-└──────────┬──────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────┐
-│ mcp_to_skill.py                     │
-│ - Reads config                      │
-│ - Generates Skill structure         │
-└──────────┬──────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────┐
-│ Generated Skill                     │
-│ ├── SKILL.md (100 tokens)           │
-│ ├── executor.py (dynamic calls)     │
-│ └── config files                    │
-└─────────────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────┐
-│ Claude                              │
-│ - Loads metadata only               │
-│ - Full docs when needed             │
-│ - Calls executor for tools          │
-└─────────────────────────────────────┘
-```
+At conversion time, the script connects to the MCP server and introspects its tools. It then generates a `SKILL.md` containing tool names/descriptions and an `executor.py` that handles the actual MCP communication at runtime.
 
-## Examples
+The executor has a `uv run --script` shebang with inline PEP 723 metadata, so dependencies (`mcp`, `httpx`) are resolved automatically on first run -- no virtual environment or install step required. Just run `./executor.py` directly.
 
-### Example 1: GitHub Integration
+**Context savings**: Instead of loading all tool schemas upfront (~500 tokens per tool), Claude loads only the skill metadata (~100 tokens) until the skill is actually used.
 
-```bash
-# Create config
-cat > github.json << 'EOF'
-{
-  "name": "github",
-  "command": "npx",
-  "args": ["-y", "@modelcontextprotocol/server-github"],
-  "env": {"GITHUB_TOKEN": "ghp_your_token"}
-}
-EOF
+## Supported Transports
 
-# Convert
-python mcp_to_skill.py --mcp-config github.json --output-dir ./skills/github
+| Transport | Config key | Protocol |
+|-----------|-----------|----------|
+| stdio | `command` + `args` | Subprocess with JSON-RPC over stdin/stdout |
+| HTTP | `url` | MCP Streamable HTTP (JSON-RPC over HTTP) |
 
-# Result: GitHub tools accessible with 100 tokens vs 8k
-```
-
-### Example 2: Multiple Servers
-
-```bash
-# Convert multiple MCP servers
-for config in configs/*.json; do
-  name=$(basename "$config" .json)
-  python mcp_to_skill.py --mcp-config "$config" --output-dir "./skills/$name"
-done
-```
-
-## Troubleshooting
-
-### "mcp package not found"
-```bash
-pip install mcp
-```
-
-### "MCP server not responding"
-Check your config file:
-- Command is correct
-- Environment variables set
-- Server is accessible
-
-### Testing the generated skill
-```bash
-cd skills/your-skill
-
-# List tools
-python executor.py --list
-
-# Describe a tool
-python executor.py --describe tool_name
-
-# Call a tool
-python executor.py --call '{"tool": "tool_name", "arguments": {...}}'
-```
-
-## Limitations
-
-- Early stage (feedback welcome)
-- Requires `mcp` Python package
-- Some complex auth may need adjustments
-- Not all MCP servers tested
-
-## Contributing
-
-This is a proof of concept. Contributions welcome:
-- Test with more MCP servers
-- Improve error handling
-- Add more examples
-- Better documentation
-
-## Credits
-
-Inspired by:
-- [playwright-skill](https://github.com/lackeyjb/playwright-skill) by @lackeyjb
-- [Anthropic Skills](https://www.anthropic.com/news/skills) framework
-- [Model Context Protocol](https://modelcontextprotocol.io/)
-
-## License
-
-MIT
-
-## Learn More
-
-- [Detailed writeup](link-to-your-gist)
-- [Anthropic Skills docs](https://www.anthropic.com/news/skills)
-- [MCP specification](https://modelcontextprotocol.io/)
-
----
-
-**Status**: Functional but early stage  
-**Feedback**: Issues and PRs welcome  
-**Questions**: Open an issue
+The transport is auto-detected from the config: if `url` is present it uses HTTP, if `command` is present it uses stdio. You can also set `"transport"` explicitly.

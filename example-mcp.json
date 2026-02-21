@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "youtrack": {
+      "url": "https://example.youtrack.cloud/mcp",
+      "transport": "http",
+      "headers": {
+        "Authorization": "Bearer your-youtrack-token-here"
+      }
+    },
+    "github": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_TOKEN": "your-github-token-here"
+      }
+    }
+  }
+}
